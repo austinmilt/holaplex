@@ -1,9 +1,8 @@
-import React, { useRef } from 'react';
-import { Skeleton, Card, Row, Image, Typography, Tooltip } from 'antd';
+import React from 'react';
+import { Skeleton, Row, Image, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
 import styled from 'styled-components';
-import { DateTime, Duration } from 'luxon';
-// import Image as NextImage from 'next/image';
+import { DateTime } from 'luxon';
 import { NFTMetadata, Listing } from '@/modules/indexer';
 import { NFTFallbackImage } from '@/common/constants/NFTFallbackImage';
 import { useInView } from 'react-intersection-observer';
@@ -61,6 +60,8 @@ const StyledSkeletonImage = styled(Skeleton.Image)`
   width: 100% !important;
   height: 100% !important;
 `;
+
+const styledSkeletonImageNode: React.ReactNode = <StyledSkeletonImage className="skeleton-animation !h-full !w-full rounded-t-lg" />;
 
 // Going with a full replace of the listing during loading for now, but might revert to swapping individual parts of the component below with its loading state. (as done in a previous commit)
 export function SkeletonListing() {
@@ -128,6 +129,7 @@ export function lamportToSolIsh(lamports: number | null) {
 export function ListingPreview({
   listing,
   meta,
+  suppliedNft
 }: {
   listing: Listing;
   meta: {
@@ -136,6 +138,7 @@ export function ListingPreview({
     sortBy: SortOptions;
     filterBy: FilterOptions;
   };
+  suppliedNft?: Promise<NFTMetadata>
 }) {
   const storeHref = `https://${listing?.subdomain}.holaplex.com`;
   const listingHref = storeHref + `/listings/${listing.listingAddress}`;
@@ -147,7 +150,7 @@ export function ListingPreview({
   const { track } = useAnalytics();
 
   const [showArtPreview, setShowArtPreview] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loadingNft, setLoadingNft] = useState(true);
   const [nft, setNFT] = useState<NFTMetadata | null>(null);
 
   const nftMetadata = listing?.items?.[0]; // other items are usually tiered auctions or participation nfts
@@ -163,7 +166,7 @@ export function ListingPreview({
       if (res.ok) {
         const nftJson: NFTMetadata = await res.json();
         setNFT(nftJson);
-        setTimeout(() => setLoading(false), 500);
+        setTimeout(() => setLoadingNft(false), 500);
 
         // if (window.location.host.includes('localhost')) {
         //   console.log(nftMetadata.name, {
@@ -173,19 +176,35 @@ export function ListingPreview({
         // }
       }
     }
+
+    async function awaitSuppliedNftResolve() {
+        if (suppliedNft !== undefined) {
+            const nftJson: NFTMetadata = await suppliedNft;
+            setNFT(nftJson);
+            setLoadingNft(false);
+        }
+    }
+
     if (!nftMetadata?.uri) {
       return;
     }
 
-    fetchNFTDataFromIPFS();
+    if (nft === null) {
+        if (suppliedNft === undefined) {
+            fetchNFTDataFromIPFS();
+
+        } else {
+            awaitSuppliedNftResolve();
+        }
+    }
   }, [nftMetadata?.uri]);
 
   // shows up to 2 decimals, but removes pointless 0s
   const displayPrice = getFormatedListingPrice(listing) || 0;
 
   // no subdomain means it's a shell/skeleton
-  if (loading || !listing.subdomain) {
-    return <SkeletonListing />;
+  if (loadingNft || !listing.subdomain) {
+    return <SkeletonListing/>;
   }
 
   const listingEndsAtDateTime = listing.endsAt ? DateTime.fromISO(listing.endsAt) : null;
@@ -205,36 +224,37 @@ export function ListingPreview({
     >
       <a href={listingHref} rel="nofollow noreferrer" target="_blank" className="">
         <Square>
-          <NFTPreview
-            $show={inView}
-            src={imgOpt(nft?.image || '', 600)}
-            preview={{
-              visible: showArtPreview,
-              mask: (
-                <CustomImageMask
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    setShowArtPreview(true);
-                    track('Listing Preview Expanded', {
-                      event_category: 'Discovery',
-                      event_label: nftMetadata.name,
-                      ...meta,
-                      ...addListingToTrackCall(listing),
-                    });
-                  }}
-                >
-                  <CustomExpandIcon />
-                </CustomImageMask>
-              ),
-              onVisibleChange: (visible, prevVisible) => {
-                prevVisible && setShowArtPreview(visible);
-              },
-              destroyOnClose: true,
-            }}
-            alt={nftMetadata?.name + ' preview'}
-            fallback={NFTFallbackImage}
-          />
+            <NFTPreview
+                $show={inView}
+                src={imgOpt(nft?.image || '', 600)}
+                preview={{
+                    visible: showArtPreview,
+                    mask: (
+                    <CustomImageMask
+                        onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        setShowArtPreview(true);
+                        track('Listing Preview Expanded', {
+                            event_category: 'Discovery',
+                            event_label: nftMetadata.name,
+                            ...meta,
+                            ...addListingToTrackCall(listing),
+                        });
+                        }}
+                    >
+                        <CustomExpandIcon />
+                    </CustomImageMask>
+                    ),
+                    onVisibleChange: (visible, prevVisible) => {
+                        prevVisible && setShowArtPreview(visible);
+                    },
+                    destroyOnClose: true,
+                }}
+                alt={nftMetadata?.name + ' preview'}
+                fallback={NFTFallbackImage}
+                placeholder={<StyledSkeletonImage className="skeleton-animation !h-full !w-full rounded-t-lg" />}
+            />
         </Square>
       </a>
       <div className="border-x border-gray-800 px-4 pt-4 pb-5">

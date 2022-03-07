@@ -18,12 +18,8 @@ import {
   SelectProps,
 } from 'antd';
 import Button from '@/components/elements/Button';
-import useInfiniteScroll from 'react-infinite-scroll-hook';
 import {
-  take,
   compose,
-  when,
-  add,
   always,
   ifElse,
   filter,
@@ -36,12 +32,11 @@ import {
   sortWith,
   equals,
 } from 'ramda';
-import { IndexerSDK, Listing } from '@/modules/indexer';
+import { IndexerSDK, Listing, NFTMetadata } from '@/modules/indexer';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import {
   generateListingShell,
   ListingPreview,
-  SkeletonListing,
 } from '@/common/components/elements/ListingPreview';
 import Link from 'next/link';
 import { SelectValue } from 'antd/lib/select';
@@ -50,6 +45,9 @@ import SocialLinks from '@/common/components/elements/SocialLinks';
 import { StorefrontContext } from '@/modules/storefront';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletContext } from '@/modules/wallet';
+import { FixedSizeGrid } from 'react-window';
+import AutoSizer from 'react-virtualized-auto-sizer';
+import { maybeCDN } from '@/common/utils';
 
 const { Title, Text } = Typography;
 const Option = Select.Option;
@@ -59,6 +57,8 @@ const WHICHDAO = process.env.NEXT_PUBLIC_WHICHDAO as string;
 const DAO_LIST_IPFS =
   process.env.NEXT_PUBLIC_DAO_LIST_IPFS ||
   'https://ipfs.cache.holaplex.com/bafkreidnqervhpcnszmjrj7l44mxh3tgd7pphh5c4jknmnagifsm62uel4';
+
+const N_LISTINGS_TO_PREVIEW: number = 8;
 
 const DAOStoreFrontList = async () => {
   if (WHICHDAO) {
@@ -358,13 +358,16 @@ const getDefaultFilter = () => {
   return FilterOptions.Auctions;
 };
 
+
 export default function Home({ featuredStorefronts, selectedDaoSubdomains }: HomeProps) {
+    const nftCache: {[listingAddress: String]: NFTMetadata} = {};
+
   const { setVisible } = useWalletModal();
   const { storefront, searching } = useContext(StorefrontContext);
   const { connected, connecting } = useWallet();
   const { looking } = useContext(WalletContext);
   const { track } = useAnalytics();
-  const [show, setShow] = useState(16);
+  const [show, setShow] = useState(N_LISTINGS_TO_PREVIEW);
   const [loading, setLoading] = useState(true);
   const [allListings, setAllListings] = useState<Listing[]>([]);
   const [featuredListings, setFeaturedListings] = useState<Listing[]>(
@@ -384,26 +387,6 @@ export default function Home({ featuredStorefronts, selectedDaoSubdomains }: Hom
 
     listingsTopRef.current.scrollIntoView();
   };
-
-  const loadMoreListings = () => {
-    const total = displayedListings.length;
-
-    const next = compose(
-      when((next) => next > total, always(total)),
-      add(8)
-    )(show);
-
-    setShow(next);
-  };
-
-  const hasNextPage = show < displayedListings.length;
-
-  const [sentryRef] = useInfiniteScroll({
-    loading,
-    hasNextPage,
-    onLoadMore: loadMoreListings,
-    rootMargin: '0px 0px 200px 0px',
-  });
 
   const applyListingFilterAndSort = compose<Listing[], Listing[], Listing[]>(
     filter(filters[filterBy]),
@@ -433,6 +416,7 @@ export default function Home({ featuredStorefronts, selectedDaoSubdomains }: Hom
     getListings();
   }, []);
 
+
   /*
    * Scroll to top of `Current listings` section
    */
@@ -455,8 +439,71 @@ export default function Home({ featuredStorefronts, selectedDaoSubdomains }: Hom
     }
 
     setDisplayedListings(applyListingFilterAndSort(allListings));
-    setShow(16);
+    setShow(N_LISTINGS_TO_PREVIEW);
   }, [filterBy, sortBy]);
+
+
+    // TODO preferably I'd be able to pass responsive width determined by Row into FixedSizeGrid
+    const renderListings = (listings: Listing[], sortBy: SortOptions, filterBy: FilterOptions, nListingsToShow: number): Autosizer => {
+        return <AutoSizer disableHeight>
+            {({width}) => {
+                // TODO move these to either top-level constants or figure out the way to make them correctly responsive
+                const singlePreviewHeightPixels: number = 429;
+                const singlePreviewWidthPixels: number = 269;
+                const nColumns: number = Math.floor(width / (singlePreviewWidthPixels));
+                const nRows: number = Math.ceil(listings.length / nColumns);
+                const viewHeightPixels: number = singlePreviewHeightPixels * (nListingsToShow / nColumns);
+                const nRowsToPreload: number = 1;
+                return <FixedSizeGrid
+                    columnCount={nColumns}
+                    columnWidth={singlePreviewWidthPixels}
+                    height={viewHeightPixels}
+                    rowCount={nRows}
+                    rowHeight={singlePreviewHeightPixels}
+                    width={width}
+                    overscanRowCount={nRowsToPreload}
+                >
+                        {({ columnIndex, rowIndex, style }) => renderListing(listings, rowIndex*4 + columnIndex, sortBy, filterBy, style)}
+                </FixedSizeGrid>}
+            }
+        </AutoSizer>;
+    }
+
+
+    const renderListing = (listings: Listing[], i: number, sortBy: SortOptions, filterBy: FilterOptions, style: any): ListingPreview => {
+        if (listings[i] === undefined) return null;
+        return <Col style={style} xs={24} sm={12} md={12} lg={8} xl={6} xxl={6} key={listings[i]?.listingAddress}>        
+            <ListingPreview
+                listing={listings[i]}
+                meta={{
+                    index: i,
+                    list: 'current-listings',
+                    sortBy: sortBy,
+                    filterBy: filterBy,
+                }}
+                suppliedNft={getOrLoadNftMetadata(listings[i])}
+            />
+        </Col>;
+    }
+
+    // TODO ideally this wouldnt be the responsibility of this component to cache. A Provider could
+    //  decouple the ListingPreview from this component, but Providers arent recommended for only
+    //  passing data down one level like this
+    const getOrLoadNftMetadata = async (listing: Listing): Promise<NFTMetadata | undefined> => {
+        let result: NFTMetadata | undefined = nftCache[listing.listingAddress];
+        if (result === undefined) {
+            const nftMetadata: Item | undefined = listing?.items?.[0];
+            if (nftMetadata !== undefined) {
+                const res = await fetch(maybeCDN(nftMetadata.uri));
+                if (res.ok) {
+                    const nftJson: NFTMetadata = await res.json();
+                    result = nftJson;
+                    nftCache[listing.listingAddress] = result;
+                }
+            }
+        }
+        return result;
+    }
 
   return (
     <Row className="mt-10">
@@ -603,10 +650,8 @@ export default function Home({ featuredStorefronts, selectedDaoSubdomains }: Hom
                 </Space>,
               ]}
             />
-            <Row gutter={24}>
-              {/* <Col xs={24} sm={12} md={12} lg={8} xl={6} xxl={6}>
-                <SkeletonListing />
-              </Col> */}
+            <Row gutter={24}>{renderListings(displayedListings, sortBy, filterBy, show)}</Row>
+            {/* <Row gutter={24}>
               {take(show, displayedListings).map((listing: Listing, i) => (
                 <Col xs={24} sm={12} md={12} lg={8} xl={6} xxl={6} key={listing?.listingAddress}>
                   <ListingPreview
@@ -636,7 +681,7 @@ export default function Home({ featuredStorefronts, selectedDaoSubdomains }: Hom
                   </Col>
                 </>
               )}
-            </Row>
+            </Row> */}
           </Col>
         </Section>
       </CenteredContentCol>
