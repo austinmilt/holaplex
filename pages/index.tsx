@@ -450,17 +450,28 @@ export default function Home({ featuredStorefronts, selectedDaoSubdomains }: Hom
                 // TODO move these to either top-level constants or figure out the way to make them correctly responsive
                 const singlePreviewHeightPixels: number = 429;
                 const singlePreviewWidthPixels: number = 269;
-                const nColumns: number = Math.floor(width / (singlePreviewWidthPixels));
+                const nColumns: number = 4;
+                // const nColumns: number = Math.floor(width / (singlePreviewWidthPixels));
                 const nRows: number = Math.ceil(listings.length / nColumns);
                 const viewHeightPixels: number = singlePreviewHeightPixels * (nListingsToShow / nColumns);
                 const nRowsToPreload: number = 1;
+
+                let columnWidth = width / nColumns;
+                columnWidth = Math.max(200, columnWidth);
+                columnWidth = Math.min(500, columnWidth);
+                columnWidth = Math.floor(columnWidth);
+
+                const rowHeight: number = columnWidth*(429/269);
+
+                const adjustedWidth = Math.min(width, columnWidth * nColumns);
+
                 return <FixedSizeGrid
                     columnCount={nColumns}
-                    columnWidth={singlePreviewWidthPixels}
+                    columnWidth={columnWidth}
                     height={viewHeightPixels}
                     rowCount={nRows}
-                    rowHeight={singlePreviewHeightPixels}
-                    width={width}
+                    rowHeight={rowHeight}
+                    width={adjustedWidth}
                     overscanRowCount={nRowsToPreload}
                 >
                         {({ columnIndex, rowIndex, style }) => renderListing(listings, rowIndex*4 + columnIndex, sortBy, filterBy, style)}
